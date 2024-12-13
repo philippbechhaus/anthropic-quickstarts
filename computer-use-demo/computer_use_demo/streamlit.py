@@ -106,10 +106,10 @@ async def main():
 
     st.markdown(STREAMLIT_STYLE, unsafe_allow_html=True)
 
-    st.title("Claude Computer Use Demo")
+    st.title("evaLabs Navigator™")
 
-    if not os.getenv("HIDE_WARNING", False):
-        st.warning(WARNING_TEXT)
+    # if not os.getenv("HIDE_WARNING", False):
+    #     st.warning(WARNING_TEXT)
 
     with st.sidebar:
 
@@ -172,12 +172,65 @@ async def main():
         else:
             st.session_state.auth_validated = True
 
-    chat, http_logs = st.tabs(["Chat", "HTTP Exchange Logs"])
-    new_message = st.chat_input(
-        "Type a message to send to Claude to control the computer..."
-    )
+    kis, chat, http_logs = st.tabs(["KIS", "Chat", "HTTP Exchange Logs"])
+    
+    with kis:
+        # Add form to contain all inputs and button
+        with st.form("flight_search_form"):
+            # Departure Airport input (force uppercase)
+            departure = st.text_input(
+                "Departure Airport",
+                key="departure",
+                max_chars=3,
+                help="Enter 3-letter airport code (e.g., LAX)"
+            ).upper()
+
+            # Destination Airport input (force uppercase)
+            destination = st.text_input(
+                "Destination Airport",
+                key="destination",
+                max_chars=3,
+                help="Enter 3-letter airport code (e.g., JFK)"
+            ).upper()
+
+            # Date picker with explicit parameters
+            date = st.date_input(
+                label="Select Date",
+                value=datetime.today(),
+                min_value=datetime.today(),
+                key="date_picker",
+                format="MM/DD/YYYY",
+                help="Select your travel date"
+            )
+
+            # Submit button
+            submitted = st.form_submit_button("Inquire")
+
+            if submitted:
+                # Clear previous conversation
+                st.session_state.messages = []
+                
+                # Format the date as MM/DD/YY for the query
+                formatted_date = date.strftime("%m/%d/%y")
+                
+                # Create the message and treat it like a new chat message
+                flight_query = f"Show all flights from {departure} to {destination} on {date}"
+                new_message = flight_query  # This mimics how chat input is handled
+                if new_message:
+                    st.session_state.messages.append(
+                        {
+                            "role": Sender.USER,
+                            "content": [
+                                *maybe_add_interruption_blocks(),
+                                BetaTextBlockParam(type="text", text=new_message),
+                            ],
+                        }
+                    )
 
     with chat:
+        new_message = st.chat_input(
+            "Type a message to send to Claude to control the computer..."
+        )
         # render past chats
         for message in st.session_state.messages:
             if isinstance(message["content"], str):
