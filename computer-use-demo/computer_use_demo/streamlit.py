@@ -66,10 +66,13 @@ def setup_state():
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "api_key" not in st.session_state:
-        # Try to load API key from file first, then environment
         st.session_state.api_key = load_from_storage("api_key") or os.getenv(
             "ANTHROPIC_API_KEY", ""
         )
+    if "patient_info" not in st.session_state:
+        st.session_state.patient_info = None
+    if "current_patient_id" not in st.session_state:
+        st.session_state.current_patient_id = None
     if "provider" not in st.session_state:
         st.session_state.provider = (
             os.getenv("API_PROVIDER", "anthropic") or APIProvider.ANTHROPIC
@@ -175,57 +178,97 @@ async def main():
     kis, chat, http_logs = st.tabs(["KIS", "Chat", "HTTP Exchange Logs"])
     
     with kis:
-        # Add form to contain all inputs and button
-        with st.form("flight_search_form"):
-            # Departure Airport input (force uppercase)
-            departure = st.text_input(
-                "Departure Airport",
-                key="departure",
-                max_chars=3,
-                help="Enter 3-letter airport code (e.g., LAX)"
-            ).upper()
-
-            # Destination Airport input (force uppercase)
-            destination = st.text_input(
-                "Destination Airport",
-                key="destination",
-                max_chars=3,
-                help="Enter 3-letter airport code (e.g., JFK)"
-            ).upper()
-
-            # Date picker with explicit parameters
-            date = st.date_input(
-                label="Select Date",
-                value=datetime.today(),
-                min_value=datetime.today(),
-                key="date_picker",
-                format="MM/DD/YYYY",
-                help="Select your travel date"
+        # Add form for Patient ID
+        with st.form("patient_id_form"):
+            # Patient ID input (alphanumerical)
+            patient_id = st.text_input(
+                "Patient ID",
+                key="patient_id",
+                help="Enter alphanumerical Patient ID"
             )
+            
+            # Submit button for Patient ID
+            lookup_submitted = st.form_submit_button("Look up Patient")
 
-            # Submit button
-            submitted = st.form_submit_button("Inquire")
+            if lookup_submitted and patient_id:
+                # Create the specific LibreOffice lookup query
+                lookup_query = f"Open the file Patient Data in LibreOffice Calc and search for a specific Patient ID: {patient_id}. Respond with this PatientID's first and last name."
+                
+                # Safely create new message
+                new_message = {
+                    "role": Sender.USER,
+                    "content": [
+                        BetaTextBlockParam(type="text", text=lookup_query),
+                    ],
+                }
+                
+                # Clear and initialize messages list
+                st.session_state.messages = [new_message]
+                # Initialize tools dictionary if it doesn't exist
+                if "tools" not in st.session_state:
+                    st.session_state.tools = {}
 
-            if submitted:
-                # Clear previous conversation
-                st.session_state.messages = []
-                
-                # Format the date as MM/DD/YY for the query
-                formatted_date = date.strftime("%m/%d/%y")
-                
-                # Create the message and treat it like a new chat message
-                flight_query = f"Show all flights from {departure} to {destination} on {date}"
-                new_message = flight_query  # This mimics how chat input is handled
-                if new_message:
-                    st.session_state.messages.append(
-                        {
-                            "role": Sender.USER,
-                            "content": [
-                                *maybe_add_interruption_blocks(),
-                                BetaTextBlockParam(type="text", text=new_message),
-                            ],
-                        }
-                    )
+        # Always show the patient information field
+        # Get the most recent response if available
+        response_text = "No patient information available"
+        if st.session_state.messages:
+            assistant_messages = [
+                msg for msg in st.session_state.messages 
+                if msg["role"] == Sender.BOT
+            ]
+            if assistant_messages:
+                latest_response = assistant_messages[-1]
+                if isinstance(latest_response["content"], list):
+                    response_text = next((
+                        block["text"] 
+                        for block in latest_response["content"] 
+                        if block["type"] == "text"
+                    ), "No patient information found")
+                else:
+                    response_text = latest_response["content"]
+
+        st.text_area(
+            "Patient Information",
+            value=response_text,
+            disabled=True,
+            key="patient_info_display",
+            height=200
+        )
+
+        # If we have a user message to respond to, run the sampling loop
+        if st.session_state.messages and st.session_state.messages[-1]["role"] == Sender.USER:
+            try:
+                with st.spinner('Looking up patient information...'):  # Add a spinner while processing
+                    with track_sampling_loop():
+                        # Create a dummy tool output callback that stores results
+                        def dummy_tool_callback(tool_output, tool_id, tool_state):
+                            tool_state[tool_id] = tool_output
+                            
+                        # run the agent sampling loop with the newest message
+                        st.session_state.messages = await sampling_loop(
+                            system_prompt_suffix=st.session_state.custom_system_prompt,
+                            model=st.session_state.model,
+                            provider=st.session_state.provider,
+                            messages=st.session_state.messages,
+                            output_callback=lambda *args, **kwargs: None,  # Disable output in KIS tab
+                            tool_output_callback=partial(dummy_tool_callback, tool_state=st.session_state.tools),  # Store but don't display
+                            api_response_callback=partial(
+                                _api_response_callback,
+                                tab=http_logs,
+                                response_state=st.session_state.responses,
+                            ),
+                            api_key=st.session_state.api_key,
+                            only_n_most_recent_images=st.session_state.only_n_most_recent_images,
+                        )
+                        # Force a rerun to update the UI with the new response
+                        st.rerun()
+            except Exception as e:
+                if "Overloaded" in str(e):
+                    st.error("The service is currently overloaded. Please wait a moment and try again.")
+                    # Wait a few seconds before allowing another attempt
+                    await asyncio.sleep(2)
+                else:
+                    st.error(f"An error occurred: {str(e)}")
 
     with chat:
         new_message = st.chat_input(
@@ -265,35 +308,6 @@ async def main():
                 }
             )
             _render_message(Sender.USER, new_message)
-
-        try:
-            most_recent_message = st.session_state["messages"][-1]
-        except IndexError:
-            return
-
-        if most_recent_message["role"] is not Sender.USER:
-            # we don't have a user message to respond to, exit early
-            return
-
-        with track_sampling_loop():
-            # run the agent sampling loop with the newest message
-            st.session_state.messages = await sampling_loop(
-                system_prompt_suffix=st.session_state.custom_system_prompt,
-                model=st.session_state.model,
-                provider=st.session_state.provider,
-                messages=st.session_state.messages,
-                output_callback=partial(_render_message, Sender.BOT),
-                tool_output_callback=partial(
-                    _tool_output_callback, tool_state=st.session_state.tools
-                ),
-                api_response_callback=partial(
-                    _api_response_callback,
-                    tab=http_logs,
-                    response_state=st.session_state.responses,
-                ),
-                api_key=st.session_state.api_key,
-                only_n_most_recent_images=st.session_state.only_n_most_recent_images,
-            )
 
 
 def maybe_add_interruption_blocks():
