@@ -207,8 +207,12 @@ async def main():
                 # Initialize tools dictionary if it doesn't exist
                 if "tools" not in st.session_state:
                     st.session_state.tools = {}
+                # Store the current patient ID
+                st.session_state.current_patient_id = patient_id
+                # Reset visit-related session states
+                if 'visits_loaded' in st.session_state:
+                    del st.session_state.visits_loaded
 
-        # Always show the patient information field
         # Get the most recent response if available
         response_text = "No patient information available"
         if st.session_state.messages:
@@ -227,31 +231,97 @@ async def main():
                 else:
                     response_text = latest_response["content"]
 
+        # Always show the patient information field
         st.text_area(
             "Patient Information",
             value=response_text,
             disabled=True,
             key="patient_info_display",
-            height=200
+            height=300
         )
+
+        # Show confirmation button or visit selection based on state
+        if not st.session_state.get('visits_loaded', False):
+            # Show confirmation button if we have patient info
+            if response_text != "No patient information available":
+                if st.button("Confirm Patient Identity"):
+                    # Create the visits lookup query with explicit format instructions
+                    visits_query = (
+                        f"Look for all Visits of this specific patient with the ID: {st.session_state.current_patient_id}. "
+                        "List each visit in the following format:\n"
+                        "Date: MM/DD/YY - Documentation: [documentation number]\n\n"
+                        "Example format:\n"
+                        "Date: 12/15/24 - Documentation: documentationtest1 45641\n"
+                        "Please list all visits in this exact format."
+                    )
+                    
+                    # Add the query to messages
+                    st.session_state.messages.append({
+                        "role": Sender.USER,
+                        "content": [
+                            BetaTextBlockParam(type="text", text=visits_query),
+                        ],
+                    })
+                    st.session_state.visits_loaded = True
+                    st.rerun()
+        else:
+            # Parse visits from response text with the standardized format
+            import re
+            visits = []
+            for line in response_text.split('\n'):
+                if match := re.match(r'Date:\s*(\d{2}/\d{2}/\d{2})\s*-\s*Documentation:\s*(.+)', line):
+                    date, doc = match.groups()
+                    visits.append((date.strip(), doc.strip()))
+            
+            # Date picker for visits
+            if visits:
+                st.subheader("Visit Selection")
+                selected_date = st.selectbox(
+                    "Select Visit Date",
+                    options=[date for date, _ in visits],
+                    key="selected_visit_date"
+                )
+                
+                # Find documentation for selected date
+                selected_doc = next((doc for date, doc in visits if date == selected_date), "")
+                
+                # Editable documentation field
+                st.subheader("Visit Documentation")
+                new_documentation = st.text_area(
+                    "Edit Documentation",
+                    value=selected_doc,
+                    height=300,
+                    key="documentation_editor"
+                )
+                
+                # Save button for documentation changes
+                if st.button("Save Documentation Changes"):
+                    save_query = f"Update the documentation for the visit on {selected_date} for patient {st.session_state.current_patient_id} with the following text:\n{new_documentation}"
+                    st.session_state.messages.append({
+                        "role": Sender.USER,
+                        "content": [
+                            BetaTextBlockParam(type="text", text=save_query),
+                        ],
+                    })
+                    st.rerun()
+            # else:
+            #     st.warning("No visits found in the response. Please try again.")
 
         # If we have a user message to respond to, run the sampling loop
         if st.session_state.messages and st.session_state.messages[-1]["role"] == Sender.USER:
             try:
-                with st.spinner('Looking up patient information...'):  # Add a spinner while processing
+                with st.spinner('Processing...'):
                     with track_sampling_loop():
-                        # Create a dummy tool output callback that stores results
                         def dummy_tool_callback(tool_output, tool_id, tool_state):
                             tool_state[tool_id] = tool_output
                             
-                        # run the agent sampling loop with the newest message
                         st.session_state.messages = await sampling_loop(
                             system_prompt_suffix=st.session_state.custom_system_prompt,
                             model=st.session_state.model,
                             provider=st.session_state.provider,
                             messages=st.session_state.messages,
-                            output_callback=lambda *args, **kwargs: None,  # Disable output in KIS tab
-                            tool_output_callback=partial(dummy_tool_callback, tool_state=st.session_state.tools),  # Store but don't display
+                            output_callback=lambda *args, **kwargs: None,
+                            tool_output_callback=partial(dummy_tool_callback, tool_state=st.session_state.tools),
                             api_response_callback=partial(
                                 _api_response_callback,
                                 tab=http_logs,
@@ -260,12 +330,10 @@ async def main():
                             api_key=st.session_state.api_key,
                             only_n_most_recent_images=st.session_state.only_n_most_recent_images,
                         )
-                        # Force a rerun to update the UI with the new response
                         st.rerun()
             except Exception as e:
                 if "Overloaded" in str(e):
                     st.error("The service is currently overloaded. Please wait a moment and try again.")
-                    # Wait a few seconds before allowing another attempt
                     await asyncio.sleep(2)
                 else:
                     st.error(f"An error occurred: {str(e)}")
