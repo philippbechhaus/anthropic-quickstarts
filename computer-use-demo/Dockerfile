@@ -100,13 +100,3 @@ ARG WIDTH=1024
 ENV DISPLAY_NUM=$DISPLAY_NUM
 ENV HEIGHT=$HEIGHT
 ENV WIDTH=$WIDTH
-
-# Add security configurations
-ENV NOVNC_PASSWORD=your_secure_password
-ENV STREAMLIT_SERVER_ADDRESS=0.0.0.0
-ENV STREAMLIT_SERVER_PORT=8501
-
-# Modified entrypoint for cloud
-COPY cloud_entrypoint.sh /app/
-RUN chmod +x /app/cloud_entrypoint.sh
-ENTRYPOINT ["/app/cloud_entrypoint.sh"]
