@@ -36,8 +36,8 @@ RUN apt-get update && \
     netcat \
     # PPA req
     software-properties-common && \
-    # Userland apps
     sudo add-apt-repository ppa:mozillateam/ppa && \
+    sudo apt-get update && \
     sudo apt-get install -y --no-install-recommends \
     libreoffice \
     firefox-esr \
@@ -48,7 +48,8 @@ RUN apt-get update && \
     tint2 \
     galculator \
     pcmanfm \
-    unzip && \
+    unzip \
+    default-jre && \
     apt-get clean
 
 # Install noVNC
@@ -93,6 +94,23 @@ RUN python -m pip install -r $HOME/computer_use_demo/requirements.txt
 # setup desktop env & app
 COPY --chown=$USERNAME:$USERNAME image/ $HOME
 COPY --chown=$USERNAME:$USERNAME computer_use_demo/ $HOME/computer_use_demo/
+
+# Create the Templates directory to remove pcmanfm warning
+RUN mkdir -p /home/computeruse/Templates
+
+# Copy the ODS file into the container
+COPY --chown=computeruse:computeruse image/Patient_Data.ods /home/computeruse/Patient_Data.ods
+
+# Ensure the Desktop directory exists
+RUN mkdir -p /home/computeruse/Desktop
+
+# Copy the desktop launcher
+COPY --chown=computeruse:computeruse image/PatientData.desktop /home/computeruse/Desktop/PatientData.desktop
+
+# Ensure config directory exists
+RUN mkdir -p /home/computeruse/.config/libfm && \
+    echo '[config]\nquick_exec=1' > /home/computeruse/.config/libfm/libfm.conf && \
+    chown -R computeruse:computeruse /home/computeruse/.config/libfm
 
 ARG DISPLAY_NUM=1
 ARG HEIGHT=768

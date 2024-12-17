@@ -192,7 +192,7 @@ async def main():
 
             if lookup_submitted and patient_id:
                 # Create the specific LibreOffice lookup query
-                lookup_query = f"Open the file Patient Data in LibreOffice Calc and search for a specific Patient ID: {patient_id}. Respond with this PatientID's first and last name."
+                lookup_query = f"Open the file Patient Data 1 in LibreOffice Calc, switch to the tab 'Patients', and search for a specific Patient ID: {patient_id}. Respond with this PatientID's first and last name."
                 
                 # Safely create new message
                 new_message = {

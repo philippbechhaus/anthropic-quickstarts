@@ -18,3 +18,7 @@ if [ $timeout -eq 0 ]; then
 fi
 
 rm /tmp/mutter_stderr.log
+
+# Start pcmanfm in desktop mode after mutter is ready
+echo "Starting pcmanfm for desktop icons"
+pcmanfm --desktop &
